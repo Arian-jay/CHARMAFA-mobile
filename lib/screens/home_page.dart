@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
-import '../models/meter_record.dart';
-import '../utils/billing.dart';
+import '../services/database_helper.dart';
 import 'login_page.dart';
-import 'preview_dialog.dart';
 import 'meter_input_page.dart';
+import 'package:blue_thermal_printer/blue_thermal_printer.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -12,77 +11,61 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-
-final List<MeterRecord> _meters = [
-  MeterRecord(tsNo: 'TS-001', meterNo: 'M-1001', name: 'Customer 1', purok: 'Purok 1'),
-  MeterRecord(tsNo: 'TS-001', meterNo: 'M-1002', name: 'Customer 2', purok: 'Purok 1'),
-  MeterRecord(tsNo: 'TS-002', meterNo: 'M-2001', name: 'Customer 3', purok: 'Purok 1'),
-  MeterRecord(tsNo: 'TS-002', meterNo: 'M-2002', name: 'Customer 4', purok: 'Purok 2'),
-  MeterRecord(tsNo: 'TS-003', meterNo: 'M-3001', name: 'Customer 5', purok: 'Purok 2'),
-];
-
-
 class _HomePageState extends State<HomePage> {
+  List<Map<String, dynamic>> _meters = [];
   bool _filterByTs = false;
   bool _filterByPurok = false;
-  MeterRecord? _selectedMeter;
-  String? _selectedTsNo;
-  String? _selectedPurok;
+  Map<String, dynamic>? _selectedMeter;
   String _consumptionInput = '';
+  String? _selectedPrinter;
+  List<BluetoothDevice> _devices = [];
+  BlueThermalPrinter bluetooth = BlueThermalPrinter.instance;
 
-  List<String> get _uniqueTs => _meters.map((m) => m.tsNo).toSet().toList();
-  List<String> get _uniquePuroks => _meters.map((m) => m.purok).toSet().toList();
+  @override
+  void initState() {
+    super.initState();
+    _loadMeters();
+    _getBluetoothDevices();
+    _resetIsReadIfNeeded();
+  }
 
+  void _resetIsReadIfNeeded() async {
+    final now = DateTime.now();
+    if (now.day == 10) {
+      final db = await DatabaseHelper.instance.database;
+      await db.rawUpdate('UPDATE members SET is_read = 0');
+      await _loadMeters();
+    }
+  }
 
-  void _selectTs(String tsNo) {
+  Future<void> _getBluetoothDevices() async {
+    try {
+      final devices = await bluetooth.getBondedDevices();
+      setState(() {
+        _devices = devices;
+      });
+    } catch (e) {
+      // Show error if Bluetooth is off or permission denied
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Bluetooth error: ${e.toString()}')),
+      );
+    }
+  }
+
+  Future<void> _loadMeters() async {
+    final meters = await DatabaseHelper.instance.getAllMeterDetails();
     setState(() {
-      _selectedTsNo = tsNo;
-      _selectedPurok = null;
-      _selectedMeter = null;
-      _consumptionInput = '';
+      _meters = meters;
     });
   }
 
-  void _selectPurok(String purok) {
-    setState(() {
-      _selectedPurok = purok;
-      _selectedTsNo = null;
-      _selectedMeter = null;
-      _consumptionInput = '';
-    });
+  List<String> get _uniqueTs {
+    final tsList = _meters.map((m) => m['ts_no'] as String).toSet().toList();
+    tsList.sort((a, b) => a.compareTo(b));
+    return tsList;
   }
 
-  void _selectMeter(MeterRecord meter) {
-    setState(() {
-      _selectedMeter = meter;
-      _consumptionInput = '';
-    });
-  }
-
-  void _onEnterConsumption() {
-    if (_consumptionInput.isEmpty || _selectedMeter == null) return;
-    final parsed = double.tryParse(_consumptionInput);
-    if (parsed == null) return;
-    final bill = computeBill(parsed);
-    final meter = _selectedMeter!;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => PreviewDialog(
-        meterId: meter.meterNo,
-        customerName: meter.name,
-        consumption: parsed,
-        amount: bill,
-        onCancel: () => Navigator.pop(context),
-        onPrint: () {
-          debugPrint('Printing layout for ${meter.meterNo}...');
-          Navigator.pop(context);
-          ScaffoldMessenger.of(context)
-              .showSnackBar(const SnackBar(content: Text('Printing...')));
-        },
-      ),
-    );
-  }
+  List<String> get _uniquePuroks => _meters.map((m) => m['purok'] as String).toSet().toList();
 
   Widget _buildFilterButtons() {
     return Row(
@@ -93,8 +76,6 @@ class _HomePageState extends State<HomePage> {
               setState(() {
                 _filterByTs = true;
                 _filterByPurok = false;
-                _selectedTsNo = null;
-                _selectedPurok = null;
                 _selectedMeter = null;
                 _consumptionInput = '';
               });
@@ -109,8 +90,6 @@ class _HomePageState extends State<HomePage> {
               setState(() {
                 _filterByPurok = true;
                 _filterByTs = false;
-                _selectedTsNo = null;
-                _selectedPurok = null;
                 _selectedMeter = null;
                 _consumptionInput = '';
               });
@@ -122,33 +101,60 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Widget _buildPrinterDropdown() {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.green[100],
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.green, width: 2),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          icon: const Icon(Icons.print, color: Colors.green),
+          hint: const Text('Select Printer', style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+          value: _selectedPrinter,
+          items: _devices.map((d) => DropdownMenuItem(
+            value: d.name,
+            child: Text(d.name ?? '', style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+          )).toList(),
+          onChanged: (v) => setState(() => _selectedPrinter = v),
+        ),
+      ),
+    );
+  }
+
   Widget _buildList() {
     if (_filterByTs) {
-      // Show all TS numbers with dropdown meters
       final tsGroups = _uniqueTs;
       return ListView(
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
         children: tsGroups.map((ts) {
-          final metersInTs = _meters.where((m) => m.tsNo == ts).toList();
+          final metersInTs = _meters.where((m) => m['ts_no'] == ts).toList();
           return ExpansionTile(
             title: Text("TS $ts"),
             children: metersInTs.map((meter) {
               final isSelected = _selectedMeter == meter;
+              final isRead = meter['is_read'] == 1;
               return Card(
-                color: isSelected ? Colors.grey[300] : Colors.white,
+                color: isRead ? const Color(0xFF44FF00).withOpacity(0.34) : (isSelected ? Colors.grey[300] : Colors.white),
                 child: ListTile(
-                  title: Text("Meter No: ${meter.meterNo}"),
-                  subtitle: Text("Name: ${meter.name} | Purok: ${meter.purok}"),
+                  title: Text("Meter No: ${meter['meter_no']}"),
+                  subtitle: Text("Name: ${meter['fname']} | Purok: ${meter['purok']}"),
                   onTap: () {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => MeterInputPage(meter: meter),
+                        builder: (_) => MeterInputPage(
+                          meter: meter,
+                          selectedPrinter: _selectedPrinter,
+                          devices: _devices,
+                        ),
                       ),
-                    );
+                    ).then((_) => _loadMeters());
                   },
-
                 ),
               );
             }).toList(),
@@ -156,42 +162,44 @@ class _HomePageState extends State<HomePage> {
         }).toList(),
       );
     }
-
     if (_filterByPurok) {
-      // Show all Puroks with dropdown TS and meters
       final purokGroups = _uniquePuroks;
       return ListView(
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
         children: purokGroups.map((purok) {
           final tsInPurok = _uniqueTs
-              .where((ts) => _meters.any((m) => m.purok == purok && m.tsNo == ts))
+              .where((ts) => _meters.any((m) => m['purok'] == purok && m['ts_no'] == ts))
               .toList();
 
           return ExpansionTile(
-            title: Text("Purok $purok"),
+            title: Text("$purok"),
             children: tsInPurok.map((ts) {
               final metersInTs =
-                  _meters.where((m) => m.purok == purok && m.tsNo == ts).toList();
+                  _meters.where((m) => m['purok'] == purok && m['ts_no'] == ts).toList();
 
               return ExpansionTile(
                 title: Text("TS $ts"),
                 children: metersInTs.map((meter) {
                   final isSelected = _selectedMeter == meter;
+                  final isRead = meter['is_read'] == 1;
                   return Card(
-                    color: isSelected ? Colors.grey[300] : Colors.white,
+                    color: isRead ? const Color(0xFF44FF00).withOpacity(0.34) : (isSelected ? Colors.grey[300] : Colors.white),
                     child: ListTile(
-                      title: Text("Meter No: ${meter.meterNo}"),
-                      subtitle: Text("Name: ${meter.name}"),
+                      title: Text("Meter No: ${meter['meter_no']}"),
+                      subtitle: Text("Name: ${meter['fname']}"),
                       onTap: () {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => MeterInputPage(meter: meter),
+                            builder: (_) => MeterInputPage(
+                              meter: meter,
+                              selectedPrinter: _selectedPrinter,
+                              devices: _devices,
+                            ),
                           ),
-                        );
+                        ).then((_) => _loadMeters());
                       },
-
                     ),
                   );
                 }).toList(),
@@ -201,36 +209,7 @@ class _HomePageState extends State<HomePage> {
         }).toList(),
       );
     }
-
     return const Center(child: Text("Please select a filter"));
-  }
-
-
-  Widget _buildConsumptionInput() {
-    if (_selectedMeter == null) return const SizedBox.shrink();
-    final meter = _selectedMeter!;
-    return Card(
-      margin: const EdgeInsets.only(top: 16),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Text('Meter: ${meter.meterNo} (TS: ${meter.tsNo}, ${meter.purok})'),
-            Text('Customer: ${meter.name}'),
-            TextField(
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Consumption (m³)'),
-              onChanged: (v) => setState(() => _consumptionInput = v),
-            ),
-            const SizedBox(height: 12),
-            ElevatedButton(
-              onPressed: _onEnterConsumption,
-              child: const Text('Enter'),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   @override
@@ -239,6 +218,7 @@ class _HomePageState extends State<HomePage> {
       appBar: AppBar(
         title: const Text('CHARMAFA'),
         actions: [
+          _buildPrinterDropdown(),
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: () {
@@ -258,7 +238,6 @@ class _HomePageState extends State<HomePage> {
               _buildFilterButtons(),
               const SizedBox(height: 16),
               _buildList(),
-              _buildConsumptionInput(),
             ],
           ),
         ),

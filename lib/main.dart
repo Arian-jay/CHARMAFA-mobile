@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
 import 'screens/login_page.dart';
+import 'package:permission_handler/permission_handler.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Permission.bluetoothConnect.request();
+  await Permission.bluetoothScan.request();
+  await Permission.location.request(); // Sometimes needed for device discovery
   runApp(const CharmAfaApp());
 }
 

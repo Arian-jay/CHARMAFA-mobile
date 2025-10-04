@@ -31,7 +31,7 @@ class BillingPreviewScreen extends StatelessWidget {
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
                   onPressed: () {
-                    Navigator.pop(context); // go back to consumption input
+                    Navigator.pop(context); // mo balik sa consumption input
                   },
                   child: const Text("Cancel"),
                 ),
